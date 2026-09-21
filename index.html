@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Universo de flores amarillas</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+ --amarillo:#ffd54a;--texto:#fff3cf}
+*,*::before,*::after{box-sizing:inherit}
+html,body{margin:0;height:100%;overflow:hidden;background:#05040a}
+body{font-family:Georgia,"Times New Roman",serif;color:var(--texto);touch-action:none}
+#lienzo{position:fixed;inset:0}
+.ui{position:fixed;z-index:3;font-size:.78rem;letter-spacing:.08em}
+#ayuda{left:0;right:0;top:calc(10px + env(safe-area-inset-top,0px));text-align:center;opacity:.5}
+#botones{right:14px;top:calc(46px + env(safe-area-inset-top,0px));display:flex;flex-direction:column;gap:10px}
+.btn{width:46px;height:46px;border-radius:50%;border:1px solid rgba(255,213,74,.35);
+ background:rgba(18,14,30,.7);color:var(--amarillo);font-size:1.05rem;cursor:pointer;backdrop-filter:blur(6px)}
+.btn:active{transform:scale(.94)}
+#titulo{left:0;right:0;bottom:calc(18px + env(safe-area-inset-bottom,0px));text-align:center;
+ font-size:clamp(.9rem,3.4vw,1.25rem);font-style:italic;opacity:0;transition:opacity 1.2s ease;padding:0 8vw}
+#titulo.visible{opacity:.92}
+</style>
+</head>
+<body>
+<canvas id="lienzo"></canvas>
+<div class="ui" id="ayuda">Arrastra para girar · rueda o pellizca para acercar · toca una foto</div>
+<div class="ui" id="botones">
+  <button class="btn" id="musica" aria-label="Música">♪</button>
+  <button class="btn" id="subir" aria-label="Cargar fotos">＋</button>
+  <input type="file" id="archivos" accept="image/*" multiple hidden>
+</div>
+<div class="ui" id="titulo"></div>
+
+<!-- ==========================================================
+     MÚSICA DE FONDO
+     Cambia el src por tu canción (.mp3 en la misma carpeta).
+     Suena al tocar el botón ♪ (el navegador bloquea el autoplay).
+     ========================================================== -->
+<audio id="audio" loop preload="none" src="luna.mp3"></audio>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ==========================================================
+   1) TUS FRASES — flotan por el universo como letreros.
+   ========================================================== */
+const FRASES = [
+  "Eres una persona increible",
+  "Mi suerte",
+  "Brillas como el sol",
+  "Todas las flores son solo para ti",
+  "Encanto de persona",
+];
+
+/* FRASE CENTRAL — aparece debajo del corazón. Cada elemento es una línea. */
+const FRASE_CENTRAL = [
+  "Tu alegría ilumina",
+  "hasta el universo mas grande",
+];
+
+/* ==========================================================
+   2) TUS FOTOS — cada una es un planeta.
+   Pon los archivos junto a este HTML y escribe sus nombres.
+   También puedes cargarlas desde el botón ＋ (funciona siempre).
+   ========================================================== */
+const FOTOS = [
+  "img2.jpeg",
+  "img3.jpeg",
+  "img4.jpeg",
+  "img5.jpeg",
+  "img6.jpeg",
+  "img7.jpeg",
+  "img8.jpeg",
+  "img9.jpeg",
+  "img10.jpeg",
+  "img11.jpeg",
+  "img12.jpeg",
+  "img13.jpeg",
+  "img14.jpeg",
+  "img15.jpeg",
+  "img16.jpeg",
+];
+
+/* ==========================================================
+   3) AJUSTES RÁPIDOS
+   ========================================================== */
+const CONFIG = {
+  floresPorPlaneta: 10,   // flores que orbitan cada foto
+  segundosCorazon: 4,     // el corazón central se completa en 5 s
+  estrellasCorazon: 420,
+  tamanoCorazon: .62,     // tamaño del corazón central (súbelo para agrandarlo)
+  estrellasFondo: 2000,
+  segundosFugaz: 3,       // cada cuántos segundos cruza una estrella fugaz
+  brillosCayendo: 300,     // cuántos brillos caen (pocos = más sutil)
+  radioUniverso: 46,      // qué tan separadas están las fotos
+  marco: true             // borde dorado alrededor de cada foto (false = sin borde)
+};
+
+/* ---------- escena ---------- */
+const cv = document.getElementById('lienzo');
+const renderer = new THREE.WebGLRenderer({canvas:cv, antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x05040a, 0.006);
+const camera = new THREE.PerspectiveCamera(55, 1, .1, 800);
+scene.add(new THREE.AmbientLight(0xffffff,.55));
+const luz = new THREE.PointLight(0xffd54a, 2.4, 300); scene.add(luz);
+
+function ajustar(){
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+}
+addEventListener('resize', ajustar); ajustar();
+
+/* ---------- estrellas de fondo ---------- */
+(function(){
+  const g = new THREE.BufferGeometry(), p = [];
+  for(let i=0;i<CONFIG.estrellasFondo;i++){
+    const r = 90 + Math.random()*260, t = Math.random()*Math.PI*2, f = Math.acos(2*Math.random()-1);
+    p.push(r*Math.sin(f)*Math.cos(t), r*Math.sin(f)*Math.sin(t), r*Math.cos(f));
+  }
+  g.setAttribute('position', new THREE.Float32BufferAttribute(p,3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({color:0xfff0c0,size:.9,sizeAttenuation:true,transparent:true,opacity:.85})));
+})();
+
+/* ---------- brillo suave (estrellas redondas y aura) ---------- */
+const TEX_BRILLO = (function(){
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const x = c.getContext('2d'), g = x.createRadialGradient(64,64,0,64,64,64);
+  g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(.25,'rgba(255,225,120,.85)'); g.addColorStop(1,'rgba(255,183,3,0)');
+  x.fillStyle = g; x.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+})();
+
+/* ---------- corazón de estrellas en el centro ---------- */
+const corazonPts = [];
+for(let i=0;i<CONFIG.estrellasCorazon;i++){
+  const t = (i/CONFIG.estrellasCorazon)*Math.PI*2;
+  const x = 16*Math.pow(Math.sin(t),3);
+  const y = 13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t);
+  const z = (Math.random()-.5)*4;
+  const K = CONFIG.tamanoCorazon;
+  corazonPts.push(x*K+(Math.random()-.5)*.8, y*K+(Math.random()-.5)*.8, z);
+}
+const gc = new THREE.BufferGeometry();
+gc.setAttribute('position', new THREE.Float32BufferAttribute(corazonPts,3));
+const corazon = new THREE.Points(gc, new THREE.PointsMaterial({map:TEX_BRILLO,color:0xffe27a,size:.85,transparent:true,opacity:.95,fog:false,blending:THREE.AdditiveBlending,depthWrite:false}));
+gc.setDrawRange(0,0);
+scene.add(corazon);
+
+// aura dorada detrás del corazón
+const aura = new THREE.Sprite(new THREE.SpriteMaterial({map:TEX_BRILLO, color:0xffc93a, transparent:true,
+  opacity:.33, blending:THREE.AdditiveBlending, depthWrite:false, fog:false}));
+aura.scale.set(38,38,1); aura.position.set(0,-1,-2); scene.add(aura);
+
+// frase central debajo del corazón
+function texturaCentral(lineas){
+  const c = document.createElement('canvas'), x = c.getContext('2d');
+  c.width = 1400; c.height = 340;
+  x.font = 'italic 82px Georgia'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillStyle = '#fff3cf'; x.shadowColor = '#ffb703'; x.shadowBlur = 30;
+  const y0 = 170 - (lineas.length-1)*60;
+  lineas.forEach((l,i)=> x.fillText(l, 700, y0 + i*120));
+  return new THREE.CanvasTexture(c);
+}
+const central = new THREE.Sprite(new THREE.SpriteMaterial({map:texturaCentral(FRASE_CENTRAL),
+  transparent:true, depthWrite:false, fog:false}));
+central.scale.set(34, 34*340/1400, 1);
+central.position.set(0, -17, 0);
+scene.add(central);
+
+/* ---------- textura de flor ---------- */
+function texturaFlor(){
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const x = c.getContext('2d');
+  x.translate(64,64); x.fillStyle = '#ffd54a';
+  for(let i=0;i<8;i++){ x.rotate(Math.PI/4); x.beginPath(); x.ellipse(0,-34,11,22,0,0,7); x.fill(); }
+  x.fillStyle='#8a5a00'; x.beginPath(); x.arc(0,0,15,0,7); x.fill();
+  return new THREE.CanvasTexture(c);
+}
+const TEX_FLOR = texturaFlor();
+
+/* ---------- frases flotantes ---------- */
+function texturaTexto(txt){
+  const c = document.createElement('canvas'), x = c.getContext('2d');
+  c.width = 1024; c.height = 160; x.font = '54px Georgia';
+  x.fillStyle = '#fff3cf'; x.textAlign='center'; x.textBaseline='middle';
+  x.shadowColor = '#ffb703'; x.shadowBlur = 22;
+  x.fillText(txt, 512, 80);
+  const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
+}
+FRASES.forEach((f,i)=>{
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({map:texturaTexto(f),transparent:true,depthWrite:false}));
+  const a = (i/FRASES.length)*Math.PI*2 + .6;
+  const r = CONFIG.radioUniverso*.75 + Math.random()*22;
+  s.position.set(Math.cos(a)*r, (Math.random()-.5)*34, Math.sin(a)*r);
+  s.scale.set(22, 3.4, 1);
+  scene.add(s);
+});
+
+/* ---------- fotos: cada una es un rectángulo con su proporción original ---------- */
+const planetas = [];
+const cargador = new THREE.TextureLoader();
+const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
+
+function texturaMarcador(){
+  const c = document.createElement('canvas'); c.width = 800; c.height = 600;
+  const x = c.getContext('2d');
+  x.fillStyle = '#2a2036'; x.fillRect(0,0,800,600);
+  x.globalAlpha = .55; x.drawImage(TEX_FLOR.image, 300, 190, 200, 200);
+  x.globalAlpha = .7; x.fillStyle = '#fff3cf'; x.font = '34px Georgia'; x.textAlign = 'center';
+  x.fillText('Tu foto aquí', 400, 460);
+  return new THREE.CanvasTexture(c);
+}
+
+function crearPlaneta(indice, textura, esMarcador){
+  const img = textura.image;
+  const aspecto = (img.naturalWidth || img.width) / (img.naturalHeight || img.height);
+  const L = 11;                                   // lado mayor del rectángulo
+  const w = aspecto >= 1 ? L : L*aspecto;
+  const h = aspecto >= 1 ? L/aspecto : L;
+
+  // máxima nitidez: sin recortes, sin deformar, con filtrado de calidad
+  textura.anisotropy = MAX_ANISO;
+  textura.minFilter = THREE.LinearMipmapLinearFilter;
+  textura.magFilter = THREE.LinearFilter;
+
+  const a = indice*2.4, r = CONFIG.radioUniverso + (indice%3)*9 - 6;
+  const grupo = new THREE.Group();
+  grupo.position.set(Math.cos(a)*r, (Math.random()-.5)*16, Math.sin(a)*r);
+  const panel = new THREE.Group(); grupo.add(panel);
+
+  // MeshBasicMaterial: no usa luces ni niebla, así los colores de tu foto quedan intactos
+  const foto = new THREE.Mesh(new THREE.PlaneGeometry(w,h),
+    new THREE.MeshBasicMaterial({map:textura, fog:false, toneMapped:false}));
+  foto.userData = {grupo, w, h};
+  panel.add(foto);
+
+  if(CONFIG.marco){                               // borde dorado por fuera de la foto
+    const marco = new THREE.Mesh(new THREE.PlaneGeometry(w+.7, h+.7),
+      new THREE.MeshBasicMaterial({color:0xffd54a, fog:false, transparent:true, opacity:.9}));
+    marco.position.z = -.03; panel.add(marco);
+  }
+
+  // flores orbitando alrededor del rectángulo
+  const base = Math.hypot(w,h)/2 + 2;
+  const flores = [];
+  for(let i=0;i<CONFIG.floresPorPlaneta;i++){
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:TEX_FLOR, transparent:true, depthWrite:false}));
+    const t = 1.6 + Math.random()*1.6; sp.scale.set(t,t,1);
+    flores.push({sp, rad: base + Math.random()*4, vel: .25+Math.random()*.5,
+      fase: Math.random()*Math.PI*2, incl: (Math.random()-.5)*1.2});
+    grupo.add(sp);
+  }
+  scene.add(grupo);
+  planetas.push({grupo, panel, foto, flores, marcador:!!esMarcador});
+}
+
+FOTOS.forEach((src,i)=> cargador.load(src, t=>crearPlaneta(i,t), undefined, ()=>crearPlaneta(i,texturaMarcador(),true)));
+if(!FOTOS.length) for(let i=0;i<3;i++) crearPlaneta(i, texturaMarcador(), true);
+
+function quitarMarcadores(){
+  for(let i=planetas.length-1;i>=0;i--) if(planetas[i].marcador){ scene.remove(planetas[i].grupo); planetas.splice(i,1); }
+}
+
+// cargar fotos desde el dispositivo (botón ＋)
+document.getElementById('subir').onclick = ()=> document.getElementById('archivos').click();
+document.getElementById('archivos').onchange = e=>{
+  const lista = [...e.target.files]; e.target.value = '';
+  if(!lista.length) return;
+  quitarMarcadores();
+  lista.forEach(f=> cargador.load(URL.createObjectURL(f), t=> crearPlaneta(planetas.length, t)));
+};
+
+/* ---------- controles: girar, zoom, mover ---------- */
+const objetivo = new THREE.Vector3(0,0,0);
+let objDeseado = objetivo.clone();
+let theta = .6, phi = 1.15, dist = 110, distDeseada = 95;
+let arrastrando=false, px=0, py=0, panMode=false, pinch=0;
+
+function pos(){
+  camera.position.set(
+    objetivo.x + dist*Math.sin(phi)*Math.cos(theta),
+    objetivo.y + dist*Math.cos(phi),
+    objetivo.z + dist*Math.sin(phi)*Math.sin(theta));
+  camera.lookAt(objetivo);
+}
+cv.addEventListener('pointerdown', e=>{arrastrando=true;px=e.clientX;py=e.clientY;panMode=(e.button===2||e.shiftKey);});
+addEventListener('pointerup', ()=>arrastrando=false);
+addEventListener('pointermove', e=>{
+  if(!arrastrando) return;
+  const dx=e.clientX-px, dy=e.clientY-py; px=e.clientX; py=e.clientY;
+  if(panMode){
+    const d = new THREE.Vector3().setFromMatrixColumn(camera.matrix,0).multiplyScalar(-dx*dist*.0015);
+    const u = new THREE.Vector3().setFromMatrixColumn(camera.matrix,1).multiplyScalar(dy*dist*.0015);
+    objDeseado.add(d).add(u);
+  } else {
+    theta -= dx*.005; phi = Math.max(.15, Math.min(3.0, phi - dy*.005));
+  }
+});
+cv.addEventListener('contextmenu', e=>e.preventDefault());
+cv.addEventListener('wheel', e=>{e.preventDefault(); distDeseada = Math.max(14, Math.min(320, distDeseada*(1+e.deltaY*.0012)));},{passive:false});
+cv.addEventListener('touchmove', e=>{
+  if(e.touches.length===2){
+    const d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+    if(pinch) distDeseada = Math.max(14, Math.min(320, distDeseada*(pinch/d)));
+    pinch = d; arrastrando = false;
+  }
+},{passive:true});
+addEventListener('touchend', ()=>pinch=0);
+
+// tocar una foto para acercarse a ella
+const ray = new THREE.Raycaster(), m = new THREE.Vector2();
+cv.addEventListener('click', e=>{
+  m.x = (e.clientX/innerWidth)*2-1; m.y = -(e.clientY/innerHeight)*2+1;
+  ray.setFromCamera(m, camera);
+  const hit = ray.intersectObjects(planetas.map(p=>p.foto))[0];
+  if(hit){ const d = hit.object.userData; objDeseado = d.grupo.position.clone(); distDeseada = Math.max(d.h, d.w/camera.aspect)*1.5; }
+  else { objDeseado = new THREE.Vector3(0,0,0); distDeseada = 95; }
+});
+
+/* ---------- frase de abajo ---------- */
+const $t = document.getElementById('titulo'); let nf = 0;
+function rotarFrase(){
+  $t.classList.remove('visible');
+  setTimeout(()=>{ $t.textContent = FRASES[nf++ % FRASES.length]; $t.classList.add('visible'); },1100);
+}
+rotarFrase(); setInterval(rotarFrase, 7000);
+
+/* ---------- música ---------- */
+const audio = document.getElementById('audio'), bt = document.getElementById('musica');
+bt.onclick = ()=>{ if(audio.paused) audio.play().then(()=>bt.textContent='❚❚').catch(()=>{}); else {audio.pause(); bt.textContent='♪';} };
+
+/* ---------- brillos que caen suavemente (pocos, poco a poco) ---------- */
+function crearBrillos(n, tam, vmin, vmax){
+  const pos = new Float32Array(n*3), col = new Float32Array(n*3), dat = [];
+  for(let i=0;i<n;i++) dat.push({x:(Math.random()-.5)*230, z:(Math.random()-.5)*230, y:(Math.random()-.5)*110,
+    v:vmin+Math.random()*(vmax-vmin), ph:Math.random()*6.28, dr:.4+Math.random()*.8, ax:2+Math.random()*4});
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos,3).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('color', new THREE.BufferAttribute(col,3).setUsage(THREE.DynamicDrawUsage));
+  const pts = new THREE.Points(g, new THREE.PointsMaterial({map:TEX_BRILLO, size:tam, vertexColors:true,
+    transparent:true, blending:THREE.AdditiveBlending, depthWrite:false}));
+  pts.frustumCulled = false; scene.add(pts);
+  return {pts, pos, col, dat, n};
+}
+const brillos = [
+  crearBrillos(CONFIG.brillosCayendo, 1.1, 1.2, 2.6),
+  crearBrillos(Math.round(CONFIG.brillosCayendo*.3), 2.2, .8, 1.6)
+];
+function moverBrillos(b, s, dt){
+  const TOP = 55, BOT = -55;
+  for(let i=0;i<b.n;i++){
+    const d = b.dat[i];
+    d.y -= d.v*dt;
+    if(d.y < BOT){ d.y = TOP; d.x = (Math.random()-.5)*230; d.z = (Math.random()-.5)*230; }
+    b.pos[i*3] = d.x + Math.sin(s*d.dr + d.ph)*d.ax; b.pos[i*3+1] = d.y; b.pos[i*3+2] = d.z;
+    const borde = Math.max(0, Math.min(1, (TOP-d.y)/12, (d.y-BOT)/12));   // nacen y mueren suavemente
+    const intro = Math.min(1, Math.max(0, (s - i*.09)/2));                // van apareciendo de a poco
+    const br = borde * intro * (.35 + .65*Math.abs(Math.sin(s*1.3 + d.ph)));  // titilan
+    b.col[i*3] = br; b.col[i*3+1] = br*.85; b.col[i*3+2] = br*.45;
+  }
+  b.pts.geometry.attributes.position.needsUpdate = true;
+  b.pts.geometry.attributes.color.needsUpdate = true;
+}
+
+/* ---------- estrella fugaz de fondo (una cada CONFIG.segundosFugaz) ---------- */
+const NF = 40;
+const fugPos = new Float32Array(NF*3), fugCol = new Float32Array(NF*3);
+const fugGeo = new THREE.BufferGeometry();
+fugGeo.setAttribute('position', new THREE.BufferAttribute(fugPos,3).setUsage(THREE.DynamicDrawUsage));
+fugGeo.setAttribute('color', new THREE.BufferAttribute(fugCol,3).setUsage(THREE.DynamicDrawUsage));
+const fugEstela = new THREE.Points(fugGeo, new THREE.PointsMaterial({map:TEX_BRILLO, size:2, vertexColors:true,
+  transparent:true, blending:THREE.AdditiveBlending, depthWrite:false, fog:false}));
+fugEstela.frustumCulled = false; fugEstela.visible = false; scene.add(fugEstela);
+const fugCabeza = new THREE.Sprite(new THREE.SpriteMaterial({map:TEX_BRILLO, color:0xfff2c0, transparent:true,
+  blending:THREE.AdditiveBlending, depthWrite:false, fog:false}));
+fugCabeza.visible = false; scene.add(fugCabeza);
+let fug = null, proximaFug = 3000, ultimoTs = 0;
+
+function lanzarFugaz(ts){
+  const f = new THREE.Vector3(); camera.getWorldDirection(f);
+  const r = new THREE.Vector3().setFromMatrixColumn(camera.matrix,0);
+  const u = new THREE.Vector3().setFromMatrixColumn(camera.matrix,1);
+  const D = dist + 130;                                  // siempre detrás de todo el universo
+  const altoV = 1.04*D, anchoV = Math.max(altoV*camera.aspect, altoV*.6);
+  const lado = Math.random() < .5 ? -1 : 1;
+  const inicio = camera.position.clone().addScaledVector(f,D)
+    .addScaledVector(r, lado*anchoV*(.15+Math.random()*.3)).addScaledVector(u, altoV*(.12+Math.random()*.28));
+  const dir = new THREE.Vector3().addScaledVector(r, -lado*(.8+Math.random()*.4))
+    .addScaledVector(u, -(.35+Math.random()*.3)).normalize();
+  fug = {t0:ts, dur:1300, inicio, dir, recorrido:anchoV*.75, estela:D*.3};
+  fugEstela.material.size = D*.012; fugCabeza.scale.setScalar(D*.03);
+  fugEstela.visible = fugCabeza.visible = true;
+}
+function actualizarFugaz(ts){
+  if(!fug && ts >= proximaFug){ lanzarFugaz(ts); proximaFug = ts + CONFIG.segundosFugaz*1000; }
+  if(!fug) return;
+  const p = (ts - fug.t0)/fug.dur;
+  if(p >= 1){ fug = null; fugEstela.visible = fugCabeza.visible = false; return; }
+  const alfa = Math.min(1, p/.12, (1-p)/.3), avance = fug.recorrido*p, {inicio:o, dir:d} = fug;
+  for(let i=0;i<NF;i++){
+    const k = i/(NF-1), dd = avance - k*fug.estela;
+    const v = dd < 0 ? 0 : Math.pow(1-k,1.6)*alfa;
+    fugPos[i*3] = o.x + d.x*dd; fugPos[i*3+1] = o.y + d.y*dd; fugPos[i*3+2] = o.z + d.z*dd;
+    fugCol[i*3] = v; fugCol[i*3+1] = v*.93; fugCol[i*3+2] = v*.65;
+  }
+  fugGeo.attributes.position.needsUpdate = true; fugGeo.attributes.color.needsUpdate = true;
+  fugCabeza.position.set(o.x + d.x*avance, o.y + d.y*avance, o.z + d.z*avance);
+  fugCabeza.material.opacity = alfa;
+}
+
+/* ---------- animación ---------- */
+const CICLO = CONFIG.segundosCorazon*1000;
+function animar(ts){
+  const s = ts*.001;
+  const dt = Math.min(.05, (ts - ultimoTs)/1000); ultimoTs = ts;
+  const fase = (ts % (CICLO+1200)) / CICLO;
+  gc.setDrawRange(0, Math.min(CONFIG.estrellasCorazon, Math.floor(CONFIG.estrellasCorazon*fase)));
+  corazon.material.opacity = .85 + .15*Math.sin(s*2);
+  corazon.lookAt(camera.position); corazon.rotateY(Math.sin(s*.6)*.35);
+  aura.material.opacity = .33 + .1*Math.sin(s*1.6);
+  central.material.opacity = .88 + .12*Math.sin(s*1.2);
+  luz.position.set(Math.cos(s*.3)*30, 12, Math.sin(s*.3)*30);
+
+  planetas.forEach((p,i)=>{
+    p.panel.lookAt(camera.position); p.panel.rotateZ(Math.sin(s*.5+i)*.035);
+    p.flores.forEach(f=>{
+      const a = s*f.vel + f.fase;
+      f.sp.position.set(Math.cos(a)*f.rad, Math.sin(a)*f.rad*Math.sin(f.incl), Math.sin(a)*f.rad*Math.cos(f.incl));
+    });
+    p.grupo.position.y += Math.sin(s*.6 + i)*.006;
+  });
+
+  brillos.forEach(b=>moverBrillos(b, s, dt)); actualizarFugaz(ts);
+  objetivo.lerp(objDeseado, .06);
+  dist += (distDeseada - dist)*.07;
+  pos();
+  renderer.render(scene, camera);
+  requestAnimationFrame(animar);
+}
+requestAnimationFrame(animar);
+</script>
+</body>
+</html>
